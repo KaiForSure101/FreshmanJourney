@@ -3,11 +3,13 @@
 #include "SaveManager.h"
 #include "InputManager.h"
 #include "Utility.h"
+#include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 
 Game::Game()
-    : semesterLength(30), examInterval(7), saveFilePath("data/savegame.txt") {
+    : semesterLength(30), examInterval(7), saveFilePath("data/savegame.txt"), timeSystem(player), map(player), lastActionWasSleep(false) {
     initActivities();
     initEvents();
 }
@@ -39,6 +41,7 @@ void Game::showIntro() const {
 
 void Game::startNewGame() {
     player.reset();
+    map.resetPlayerPosition();
     std::filesystem::create_directories("data");
     std::cout << "Starting a new semester...\n\n";
     gameLoop();
@@ -49,6 +52,7 @@ void Game::loadGame() {
         std::cout << "No saved game found or save file is invalid.\n";
         return;
     }
+    map.setPlayerPosition(player.getX(), player.getY());
     std::cout << "Game loaded successfully.\n\n";
     gameLoop();
 }
@@ -60,6 +64,11 @@ void Game::gameLoop() {
         active = performActivity();
         if (!active) {
             break;
+        }
+
+        if (lastActionWasSleep) {
+            lastActionWasSleep = false;
+            continue;
         }
 
         maybeTriggerEvent();
@@ -88,6 +97,7 @@ void Game::gameLoop() {
 
 void Game::displayDailyReport() const {
     std::cout << "\n=== Day " << player.getDay() << " ===\n";
+    std::cout << "Time: " << timeSystem.formatCurrentTime() << "\n";
     std::cout << player.statusSummary();
 }
 
@@ -163,27 +173,59 @@ int Game::chooseDailyActivity() const {
     return Menu::promptActivityMenu(activities);
 }
 
+void Game::enterMapMode() {
+    while (true) {
+        map.render(timeSystem);
+
+        char input = ' ';
+        std::cout << "\nChoose a direction: ";
+        std::cin >> input;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+        if (std::toupper(static_cast<unsigned char>(input)) == 'Q') {
+            return;
+        }
+
+        if (map.movePlayer(input, timeSystem)) {
+            std::cout << "\nYou moved to " << map.getLocationName() << ".\n";
+        }
+    }
+}
+
 bool Game::performActivity() {
     int selection = chooseDailyActivity();
-    if (selection == static_cast<int>(activities.size()) + 1) {
+    if (selection == static_cast<int>(activities.size()) + 2) {
         trySaveGame();
         return false;
     }
 
+    if (selection == static_cast<int>(activities.size()) + 1) {
+        enterMapMode();
+        return true;
+    }
+
     const Activity& activity = activities[selection - 1];
     std::cout << "\nYou chose: " << activity.name << "\n";
-    player.applyEnergy(-activity.energyCost);
-    player.applyHealth(activity.healthChange);
-    player.applyStress(activity.stressChange);
-    player.applyHappiness(activity.happinessChange);
-    player.applyKnowledge(activity.knowledgeChange);
-    player.applyMoney(activity.moneyChange);
-    player.applyGpa(activity.gpaChange);
+    lastActionWasSleep = false;
 
-    if (activity.energyCost > player.getEnergy()) {
-        player.applyHealth(-5);
-        player.applyStress(5);
-        std::cout << "You are pushing yourself too hard without enough energy.\n";
+    if (activity.name == "Sleep") {
+        timeSystem.sleep();
+        lastActionWasSleep = true;
+        std::cout << "You slept through the night and woke up at 08:00 AM.\n";
+    } else {
+        player.applyEnergy(-activity.energyCost);
+        player.applyHealth(activity.healthChange);
+        player.applyStress(activity.stressChange);
+        player.applyHappiness(activity.happinessChange);
+        player.applyKnowledge(activity.knowledgeChange);
+        player.applyMoney(activity.moneyChange);
+        player.applyGpa(activity.gpaChange);
+
+        if (activity.energyCost > player.getEnergy()) {
+            player.applyHealth(-5);
+            player.applyStress(5);
+            std::cout << "You are pushing yourself too hard without enough energy.\n";
+        }
     }
 
     player.clampStats();

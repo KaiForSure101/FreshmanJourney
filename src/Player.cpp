@@ -3,7 +3,7 @@
 #include <sstream>
 
 Player::Player()
-    : health(80), energy(80), stress(20), happiness(60), knowledge(20), money(300), gpa(0.0), day(1) {}
+    : health(80), energy(80), stress(20), happiness(60), knowledge(20), money(300), gpa(0.0), day(1), currentTimeMinutes(8 * 60), x(STARTING_X), y(STARTING_Y) {}
 
 void Player::reset() {
     health = 80;
@@ -14,6 +14,9 @@ void Player::reset() {
     money = 300;
     gpa = 0.0;
     day = 1;
+    currentTimeMinutes = 8 * 60;
+    x = STARTING_X;
+    y = STARTING_Y;
 }
 
 void Player::clampStats() {
@@ -102,8 +105,37 @@ int Player::getDay() const {
     return day;
 }
 
+int Player::getCurrentTime() const {
+    return currentTimeMinutes;
+}
+
+int Player::getX() const {
+    return x;
+}
+
+int Player::getY() const {
+    return y;
+}
+
 void Player::setDay(int value) {
     day = value;
+}
+
+void Player::setCurrentTime(int value) {
+    currentTimeMinutes = value;
+}
+
+void Player::setX(int value) {
+    x = value;
+}
+
+void Player::setY(int value) {
+    y = value;
+}
+
+void Player::setPosition(int xValue, int yValue) {
+    x = xValue;
+    y = yValue;
 }
 
 std::string Player::statusSummary() const {

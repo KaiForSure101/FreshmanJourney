@@ -16,8 +16,9 @@ int Menu::promptActivityMenu(const std::vector<Activity>& activities) {
         const Activity& activity = activities[index];
         std::cout << index + 1 << ". " << activity.name << " - " << activity.description << "\n";
     }
-    std::cout << activities.size() + 1 << ". Save and Exit\n";
-    return InputManager::promptInt("Enter your choice: ", 1, static_cast<int>(activities.size() + 1));
+    std::cout << activities.size() + 1 << ". Explore Campus\n";
+    std::cout << activities.size() + 2 << ". Save and Exit\n";
+    return InputManager::promptInt("Enter your choice: ", 1, static_cast<int>(activities.size() + 2));
 }
 
 bool Menu::promptYesNo(const std::string& message) {

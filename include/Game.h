@@ -4,7 +4,9 @@
 #include <vector>
 #include "Activity.h"
 #include "Event.h"
+#include "Map.h"
 #include "Player.h"
+#include "TimeSystem.h"
 
 class Game {
 public:
@@ -13,8 +15,11 @@ public:
 
 private:
     Player player;
+    TimeSystem timeSystem;
+    Map map;
     std::vector<Activity> activities;
     std::vector<Event> events;
+    bool lastActionWasSleep;
     const int semesterLength;
     const int examInterval;
     const std::string saveFilePath;
@@ -26,6 +31,7 @@ private:
     void loadGame();
     void gameLoop();
     void displayDailyReport() const;
+    void enterMapMode();
     bool performActivity();
     void maybeTriggerEvent();
     void processExam();

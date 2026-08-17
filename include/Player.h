@@ -4,6 +4,9 @@
 
 class Player {
 public:
+    static const int STARTING_X = 1;
+    static const int STARTING_Y = 1;
+
     Player();
 
     void reset();
@@ -29,8 +32,15 @@ public:
     int getMoney() const;
     double getGpa() const;
     int getDay() const;
+    int getCurrentTime() const;
+    int getX() const;
+    int getY() const;
 
     void setDay(int value);
+    void setCurrentTime(int value);
+    void setX(int value);
+    void setY(int value);
+    void setPosition(int x, int y);
 
     std::string statusSummary() const;
 
@@ -43,4 +53,7 @@ private:
     int money;
     double gpa;
     int day;
+    int currentTimeMinutes;
+    int x;
+    int y;
 };

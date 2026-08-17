@@ -6,9 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SOURCE_FILES
     src/main.cpp
     src/Game.cpp
+    src/Map.cpp
     src/Player.cpp
     src/Menu.cpp
     src/SaveManager.cpp
+    src/TimeSystem.cpp
     src/Utility.cpp
 )
 
