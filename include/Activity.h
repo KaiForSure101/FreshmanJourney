@@ -5,8 +5,9 @@
 struct Activity {
     std::string name;
     std::string description;
-    int energyCost;
+    int duration; // duration in minutes
     int healthChange;
+    int energyChange;
     int stressChange;
     int happinessChange;
     int knowledgeChange;

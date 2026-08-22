@@ -11,7 +11,7 @@ int Menu::promptMainMenu() {
 }
 
 int Menu::promptActivityMenu(const std::vector<Activity>& activities) {
-    std::cout << "\nChoose your activity for today:\n";
+    std::cout << "\nChoose your activity or action:\n";
     for (size_t index = 0; index < activities.size(); ++index) {
         const Activity& activity = activities[index];
         std::cout << index + 1 << ". " << activity.name << " - " << activity.description << "\n";
@@ -19,6 +19,18 @@ int Menu::promptActivityMenu(const std::vector<Activity>& activities) {
     std::cout << activities.size() + 1 << ". Explore Campus\n";
     std::cout << activities.size() + 2 << ". Save and Exit\n";
     return InputManager::promptInt("Enter your choice: ", 1, static_cast<int>(activities.size() + 2));
+}
+
+int Menu::promptLocationMenu(const std::vector<Activity>& activities, const std::string& locationName) {
+    std::cout << "\n==================================================\n";
+    std::cout << "LOCATION: " << locationName << "\n";
+    std::cout << "==================================================\n";
+    for (size_t index = 0; index < activities.size(); ++index) {
+        const Activity& activity = activities[index];
+        std::cout << index + 1 << ". " << activity.name << "\t(" << activity.duration << " min)\n";
+    }
+    std::cout << activities.size() + 1 << ". Leave\n";
+    return InputManager::promptInt("Choice: ", 1, static_cast<int>(activities.size() + 1));
 }
 
 bool Menu::promptYesNo(const std::string& message) {

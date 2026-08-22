@@ -33,6 +33,11 @@ private:
     void displayDailyReport() const;
     void enterMapMode();
     bool performActivity();
+
+    // Location-based activity helpers
+    std::vector<Activity> getActivitiesForLocation(LocationType location) const;
+    void handleLocation();
+
     void maybeTriggerEvent();
     void processExam();
     void trySaveGame() const;

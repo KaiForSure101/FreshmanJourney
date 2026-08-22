@@ -61,35 +61,44 @@ void Game::gameLoop() {
     bool active = true;
     while (active && player.getDay() <= semesterLength && player.isAlive()) {
         displayDailyReport();
+        int dayBefore = player.getDay();
         active = performActivity();
         if (!active) {
             break;
         }
 
-        if (lastActionWasSleep) {
-            lastActionWasSleep = false;
+        int dayAfter = player.getDay();
+        if (dayAfter > dayBefore) {
+            // Day transitioned (sleep or time crossed midnight). Run end-of-day logic.
+            maybeTriggerEvent();
+
+            if (player.getDay() % examInterval == 0) {
+                processExam();
+            }
+
+            player.clampStats();
+
+            if (!player.isAlive()) {
+                break;
+            }
+
+            if (player.getDay() < semesterLength) {
+                if (Menu::promptYesNo("Save progress before moving to the next day?")) {
+                    trySaveGame();
+                }
+            }
+
+            std::cout << "\n";
             continue;
         }
 
+        // Same day: allow more actions. Events may still trigger between actions.
         maybeTriggerEvent();
-
-        if (player.getDay() % examInterval == 0) {
-            processExam();
-        }
-
         player.clampStats();
 
         if (!player.isAlive()) {
             break;
         }
-
-        if (player.getDay() < semesterLength) {
-            if (Menu::promptYesNo("Save progress before moving to the next day?")) {
-                trySaveGame();
-            }
-        }
-        player.advanceDay();
-        std::cout << "\n";
     }
 
     displayFinalResult();
@@ -102,15 +111,11 @@ void Game::displayDailyReport() const {
 }
 
 void Game::initActivities() {
+    // At the top-level menu we only offer Sleep as a direct action.
+    // Most activities are location-based and available when the player
+    // is at a specific location on the map.
     activities = {
-        {"Attend class", "Improve knowledge and GPA at the cost of energy.", 20, 0, 10, -5, 10, 0, 0.12},
-        {"Study", "Study hard to boost knowledge and exam readiness.", 15, -5, 15, -10, 15, 0, 0.08},
-        {"Sleep", "Recover energy and health while reducing stress.", 0, 15, -15, -20, 10, 0, 0.0},
-        {"Eat well", "Restore health and happiness with a nutritious meal.", 0, 10, -5, 10, 0, -20, 0.0},
-        {"Exercise", "Improve physical health and happiness, but lower energy.", 15, 10, 10, 10, 0, 0, 0.0},
-        {"Work part-time", "Earn money, at the expense of energy and stress.", 20, -10, 15, -10, 0, 40, 0.0},
-        {"Join clubs", "Build happiness and reduce stress while making friends.", 10, 5, -10, 20, 0, -10, 0.02},
-        {"Relax with friends", "Recharge mental health and lower stress.", 5, 5, -15, 20, 0, -15, 0.0}
+        {"Sleep", "Sleep to start the next day using the TimeSystem.", 0, 15, 15, -15, 10, 0, 0, 0.0}
     };
 }
 
@@ -188,6 +193,9 @@ void Game::enterMapMode() {
 
         if (map.movePlayer(input, timeSystem)) {
             std::cout << "\nYou moved to " << map.getLocationName() << ".\n";
+            if (map.getLocationType() != LocationType::CampusPath) {
+                handleLocation();
+            }
         }
     }
 }
@@ -206,31 +214,135 @@ bool Game::performActivity() {
 
     const Activity& activity = activities[selection - 1];
     std::cout << "\nYou chose: " << activity.name << "\n";
-    lastActionWasSleep = false;
 
     if (activity.name == "Sleep") {
         timeSystem.sleep();
-        lastActionWasSleep = true;
         std::cout << "You slept through the night and woke up at 08:00 AM.\n";
     } else {
-        player.applyEnergy(-activity.energyCost);
+        if (activity.energyChange < 0 && player.getEnergy() < -activity.energyChange) {
+            std::cout << "You're too tired to do this.\n";
+            return true;
+        }
+
         player.applyHealth(activity.healthChange);
+        player.applyEnergy(activity.energyChange);
         player.applyStress(activity.stressChange);
         player.applyHappiness(activity.happinessChange);
         player.applyKnowledge(activity.knowledgeChange);
         player.applyMoney(activity.moneyChange);
         player.applyGpa(activity.gpaChange);
 
-        if (activity.energyCost > player.getEnergy()) {
-            player.applyHealth(-5);
-            player.applyStress(5);
-            std::cout << "You are pushing yourself too hard without enough energy.\n";
+        if (activity.duration > 0) {
+            std::string before = timeSystem.formatCurrentTime();
+            timeSystem.advanceTime(activity.duration);
+            std::string after = timeSystem.formatCurrentTime();
+            std::cout << "Time: " << before << " -> " << after << "\n";
+            std::cout << "Time spent: " << activity.duration << " minutes\n";
         }
     }
 
     player.clampStats();
     std::cout << "Activity complete.\n";
     return true;
+}
+
+std::vector<Activity> Game::getActivitiesForLocation(LocationType location) const {
+    std::vector<Activity> list;
+    switch (location) {
+        case LocationType::Dorm:
+            list = {
+                {"Rest", "Short rest in your dorm.", 60, 0, 20, -10, 0, 0, 0, 0.0},
+                {"Study", "Study in your room.", 60, 0, -10, 5, 0, 5, 0, 0.0}
+            };
+            break;
+        case LocationType::Library:
+            list = {
+                {"Study", "Focused study session.", 60, 0, -10, 5, 0, 8, 0, 0.0},
+                {"Read", "Light reading.", 30, 0, -3, -3, 0, 3, 0, 0.0},
+                {"Deep Study", "Long deep study.", 120, 0, -20, 10, 0, 15, 0, 0.0}
+            };
+            break;
+        case LocationType::Gym:
+            list = {
+                {"Exercise", "Regular workout.", 60, 5, -15, -10, 0, 0, 0, 0.0},
+                {"Heavy Training", "Intense training.", 120, 10, -25, -15, 0, 0, 0, 0.0},
+                {"Rest", "Short rest at the gym.", 30, 0, 5, -5, 0, 0, 0, 0.0}
+            };
+            break;
+        case LocationType::Cafeteria:
+            list = {
+                {"Eat", "Eat a full meal.", 30, 2, 15, 0, 0, 0, -10, 0.0},
+                {"Cheap Meal", "A cheaper quick meal.", 20, 0, 8, 0, 0, 0, -5, 0.0},
+                {"Social Meal", "Eat and socialize.", 60, 0, 5, 0, 8, 0, -15, 0.0}
+            };
+            break;
+        case LocationType::StudentCenter:
+            list = {
+                {"Socialize", "Chat and meet people.", 60, 0, -5, -8, 10, 0, 0, 0.0},
+                {"Relax", "Relax in the common area.", 30, 0, 0, -5, 3, 0, 0, 0.0},
+                {"Club Activity", "Participate in a club.", 120, 0, -15, 0, 8, 3, 0, 0.0}
+            };
+            break;
+        case LocationType::Classroom:
+            list = {
+                {"Review Notes", "Quick review of notes.", 30, 0, -5, 0, 0, 3, 0, 0.0},
+                {"Study", "Study in the classroom.", 60, 0, -10, 5, 0, 6, 0, 0.0}
+            };
+            break;
+        default:
+            break;
+    }
+    return list;
+}
+
+void Game::handleLocation() {
+    LocationType loc = map.getLocationType();
+    std::string locName = map.getLocationName();
+    auto locActivities = getActivitiesForLocation(loc);
+    if (locActivities.empty()) {
+        std::cout << "There is nothing to do here.\n";
+        return;
+    }
+
+    std::cout << "Day: " << player.getDay() << "\n";
+    std::cout << "Time: " << timeSystem.formatCurrentTime() << "\n";
+    std::cout << "Energy: " << player.getEnergy() << "\n";
+
+    int choice = Menu::promptLocationMenu(locActivities, locName);
+    if (choice == static_cast<int>(locActivities.size()) + 1) {
+        std::cout << "You leave the " << locName << ".\n";
+        return;
+    }
+
+    const Activity& activity = locActivities[choice - 1];
+
+    if (activity.energyChange < 0 && player.getEnergy() < -activity.energyChange) {
+        std::cout << "You're too tired to do this.\n";
+        return;
+    }
+
+    std::string before = timeSystem.formatCurrentTime();
+
+    player.applyHealth(activity.healthChange);
+    player.applyEnergy(activity.energyChange);
+    player.applyStress(activity.stressChange);
+    player.applyHappiness(activity.happinessChange);
+    player.applyKnowledge(activity.knowledgeChange);
+    player.applyMoney(activity.moneyChange);
+    player.applyGpa(activity.gpaChange);
+
+    if (activity.duration > 0) {
+        timeSystem.advanceTime(activity.duration);
+    }
+
+    std::string after = timeSystem.formatCurrentTime();
+
+    player.clampStats();
+
+    std::cout << "\nActivity completed: " << activity.name << "\n";
+    std::cout << "Time spent: " << activity.duration << " minutes\n";
+    std::cout << "Time: " << before << " -> " << after << "\n";
+    std::cout << player.statusSummary();
 }
 
 void Game::maybeTriggerEvent() {
