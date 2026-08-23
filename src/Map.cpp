@@ -38,9 +38,6 @@ void Map::setPlayerPosition(int x, int y) {
     if (isInsideMap(x, y) && isWalkable(x, y)) {
         player->setPosition(x, y);
     }
-}
-
-bool Map::movePlayer(char direction, TimeSystem& timeSystem) {
     if (player == nullptr) {
         return false;
     }
@@ -71,7 +68,7 @@ bool Map::movePlayer(char direction, TimeSystem& timeSystem) {
     }
 
     player->setPosition(newX, newY);
-    timeSystem.advanceTime(5);
+    timeSystem.advanceTime(3);
     return true;
 }
 
@@ -83,7 +80,7 @@ void Map::render(const TimeSystem& timeSystem) const {
     for (int y = 0; y < static_cast<int>(layout.size()); ++y) {
         for (int x = 0; x < static_cast<int>(layout[y].size()); ++x) {
             if (player != nullptr && player->getX() == x && player->getY() == y) {
-                std::cout << '@';
+                std::cout << 'u';
             } else {
                 std::cout << layout[y][x];
             }
