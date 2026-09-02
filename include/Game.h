@@ -2,11 +2,25 @@
 
 #include <string>
 #include <vector>
-#include "Activity.h"
 #include "Event.h"
-#include "Map.h"
 #include "Player.h"
-#include "TimeSystem.h"
+
+// ============================================================
+// Game.h
+// The Game class owns the player, the event list, and the main
+// game loop. It controls the 3-block-per-day progression and
+// enforces all win/loss conditions.
+//
+// Flow:
+//   run() -> startNewGame() or loadGame()
+//         -> gameLoop()
+//              - each day: maybeTriggerMorningEvent()
+//              - each block: display status -> player picks action
+//                            -> performAction()
+//              - after 3 blocks: applyOvernightEffects()
+//                                -> advance day
+//         -> displayFinalResult()
+// ============================================================
 
 class Game {
 public:
@@ -14,33 +28,46 @@ public:
     void run();
 
 private:
+    // The player object holds all 7 stats and the current day/block
     Player player;
-    TimeSystem timeSystem;
-    Map map;
-    std::vector<Activity> activities;
+
+    // The list of possible random morning events
     std::vector<Event> events;
-    bool lastActionWasSleep;
+
+    // How many days the semester lasts (win condition at day 30)
     const int semesterLength;
-    const int examInterval;
+
+    // Path to the save file written to disk
     const std::string saveFilePath;
 
-    void initActivities();
-    void initEvents();
-    void showIntro() const;
-    void startNewGame();
-    void loadGame();
-    void gameLoop();
-    void displayDailyReport() const;
-    void enterMapMode();
-    bool performActivity();
+    // --- Setup ---
+    void initEvents();      // Populate the events list at startup
+    void showIntro() const; // Print the welcome message
 
-    // Location-based activity helpers
-    std::vector<Activity> getActivitiesForLocation(LocationType location) const;
-    void handleLocation();
+    // --- Game flow ---
+    void startNewGame(); // Reset player stats and begin the game loop
+    void loadGame();     // Load from save file and continue
+    void gameLoop();     // Main loop: 3 blocks per day for 30 days
 
-    void maybeTriggerEvent();
-    void processExam();
-    void trySaveGame() const;
+    // --- Per-block helpers ---
+    void displayDailyStatus() const;      // Print current stats header
+    void performAction(int actionChoice); // Apply stat effects for chosen action
+
+    // --- Per-day helpers ---
+    // 30% chance each morning to trigger a random event
+    // (e.g., Illness, Scholarship, Lost Wallet, etc.)
+    void maybeTriggerMorningEvent();
+
+    // Run at end of each day (after Block 3):
+    //   - Stress > 80 damages health by 10
+    //   - Energy restores +30 from overnight sleep
+    //   - Stress decreases by 5 naturally overnight
+    void applyOvernightEffects();
+
+    // --- End of game ---
+    // Shows final GPA, money, knowledge, and an ending message
     void displayFinalResult() const;
-    int chooseDailyActivity() const;
+
+    // --- Save / Load ---
+    void trySaveGame() const; // Write save file; prints success or failure
 };

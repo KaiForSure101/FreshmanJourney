@@ -1,19 +1,40 @@
 #include "Game.h"
 #include "Menu.h"
 #include "SaveManager.h"
-#include "InputManager.h"
 #include "Utility.h"
-#include <cctype>
+#include "InputManager.h"
 #include <filesystem>
 #include <iostream>
-#include <limits>
 
+// ============================================================
+// Game.cpp
+// Implements the main game loop and all gameplay logic.
+//
+// Key design decisions:
+//   - Time is split into 3 blocks per day (Morning, Afternoon,
+//     Evening). Each action costs exactly 1 block.
+//   - After Evening, overnight effects run automatically.
+//   - A 30% random event fires each Morning before the player acts.
+//   - Stat changes from actions use simple addition/subtraction.
+//   - GPA gained from Attend Class is scaled by Knowledge:
+//       gpaGain = 0.02 + (knowledge / 100.0) * 0.03
+//     So a student with Knowledge=100 gains twice as much GPA
+//     per class as one with Knowledge=0.
+// ============================================================
+
+// ----------------------------
+// Constructor
+// ----------------------------
 Game::Game()
-    : semesterLength(30), examInterval(7), saveFilePath("data/savegame.txt"), timeSystem(player), map(player), lastActionWasSleep(false) {
-    initActivities();
+    : semesterLength(30),
+      saveFilePath("data/savegame.txt") {
     initEvents();
 }
 
+// ----------------------------
+// run: entry point called from main.cpp.
+// Loops on the main menu until the player exits.
+// ----------------------------
 void Game::run() {
     showIntro();
     while (true) {
@@ -32,386 +53,407 @@ void Game::run() {
     }
 }
 
+// ----------------------------
+// showIntro: prints once at startup
+// ----------------------------
 void Game::showIntro() const {
-    std::cout << "\nWelcome to Freshman Journey!\n";
+    std::cout << "\n";
+    std::cout << "Welcome to Freshman Journey!\n";
     std::cout << "You are beginning your first semester at university.\n";
-    std::cout << "Make daily choices, manage your health, energy, stress,\n";
-    std::cout << "happiness, knowledge, money, and GPA as you complete the semester.\n\n";
+    std::cout << "Balance your Health, Energy, Stress, Happiness,\n";
+    std::cout << "Knowledge, GPA, and Money over 30 days.\n";
+    std::cout << "Each day has 3 time blocks. Every action costs 1 block.\n\n";
 }
 
+// ----------------------------
+// startNewGame: resets all stats and begins the game loop
+// ----------------------------
 void Game::startNewGame() {
     player.reset();
-    map.resetPlayerPosition();
+    // Make sure the save folder exists so we can write later
     std::filesystem::create_directories("data");
     std::cout << "Starting a new semester...\n\n";
     gameLoop();
 }
 
+// ----------------------------
+// loadGame: reads player stats from disk, then continues the loop
+// ----------------------------
 void Game::loadGame() {
     if (!SaveManager::load(player, saveFilePath)) {
         std::cout << "No saved game found or save file is invalid.\n";
         return;
     }
-    map.setPlayerPosition(player.getX(), player.getY());
     std::cout << "Game loaded successfully.\n\n";
     gameLoop();
 }
 
+// ----------------------------
+// gameLoop: the heart of the game.
+//
+// Each iteration of the outer while-loop is ONE TIME BLOCK.
+// When 3 blocks have been used, the day ends:
+//   1. applyOvernightEffects() runs (stress penalty, energy restore)
+//   2. Player is prompted to save
+//   3. Day counter advances and block resets to 1 (Morning)
+//   4. A morning event may fire at the start of the new day
+//
+// The loop ends when:
+//   - The player's health or energy hits 0 (Game Over)
+//   - 30 days are completed (Win)
+//   - The player saves and exits
+// ----------------------------
 void Game::gameLoop() {
-    bool active = true;
-    while (active && player.getDay() <= semesterLength && player.isAlive()) {
-        displayDailyReport();
-        int dayBefore = player.getDay();
-        active = performActivity();
-        if (!active) {
+    bool keepPlaying = true;
+
+    while (keepPlaying && player.isAlive() && player.getDay() <= semesterLength) {
+
+        // At the start of every Morning (block 1), check for a random event.
+        // This gives the player a sense of unpredictability each new day.
+        if (player.getTimeBlock() == 1) {
+            maybeTriggerMorningEvent();
+        }
+
+        // Check again after the event, in case it killed the player (e.g., illness)
+        if (!player.isAlive()) {
             break;
         }
 
-        int dayAfter = player.getDay();
-        if (dayAfter > dayBefore) {
-            // Day transitioned (sleep or time crossed midnight). Run end-of-day logic.
-            maybeTriggerEvent();
+        // Show current stats so the player knows their situation
+        displayDailyStatus();
 
-            if (player.getDay() % examInterval == 0) {
-                processExam();
-            }
+        // Show the action menu and get the player's choice
+        int actionChoice = Menu::promptActionMenu(player.getDay(), player.getTimeBlock());
 
+        // Option 6 = Save and Exit
+        if (actionChoice == 6) {
+            trySaveGame();
+            keepPlaying = false;
+            break;
+        }
+
+        // Apply the chosen action's stat effects
+        performAction(actionChoice);
+
+        // Clamp all stats into their valid ranges after changes
+        player.clampStats();
+
+        // Check if the player died from the action (e.g., energy hit 0)
+        if (!player.isAlive()) {
+            break;
+        }
+
+        // Advance the time block.
+        // If we just finished Evening (block 3), end the day.
+        int currentBlock = player.getTimeBlock();
+        if (currentBlock == 3) {
+            // The day is over — run overnight effects
+            std::cout << "\n--- Night falls. Day " << player.getDay() << " is over. ---\n";
+            applyOvernightEffects();
             player.clampStats();
 
+            // Check if overnight effects killed the player (e.g., stress damage)
             if (!player.isAlive()) {
                 break;
             }
 
+            // Offer to save at the end of each day
             if (player.getDay() < semesterLength) {
-                if (Menu::promptYesNo("Save progress before moving to the next day?")) {
+                if (Menu::promptYesNo("Save progress before the next day?")) {
                     trySaveGame();
                 }
             }
 
+            // Move to the next day, starting at Morning (block 1)
+            player.advanceDay();
+            player.setTimeBlock(1);
             std::cout << "\n";
-            continue;
-        }
 
-        // Same day: allow more actions. Events may still trigger between actions.
-        maybeTriggerEvent();
-        player.clampStats();
-
-        if (!player.isAlive()) {
-            break;
+        } else {
+            // Just move to the next block within the same day
+            player.setTimeBlock(currentBlock + 1);
         }
     }
 
+    // Show the end screen (win or game over)
     displayFinalResult();
 }
 
-void Game::displayDailyReport() const {
-    std::cout << "\n=== Day " << player.getDay() << " ===\n";
-    std::cout << "Time: " << timeSystem.formatCurrentTime() << "\n";
+// ----------------------------
+// displayDailyStatus: prints the player's current stats.
+// Called at the start of every time block so the player can
+// make an informed decision about which action to choose.
+// ----------------------------
+void Game::displayDailyStatus() const {
+    std::cout << "\n";
     std::cout << player.statusSummary();
 }
 
-void Game::initActivities() {
-    // At the top-level menu we only offer Sleep as a direct action.
-    // Most activities are location-based and available when the player
-    // is at a specific location on the map.
-    activities = {
-        {"Sleep", "Sleep to start the next day using the TimeSystem.", 0, 15, 15, -15, 10, 0, 0, 0.0}
-    };
+// ----------------------------
+// performAction: applies the stat changes for one chosen action.
+//
+// Each case is a separate action with clearly labeled effects.
+// Comments explain WHY each stat changes, not just what changes.
+// ----------------------------
+void Game::performAction(int actionChoice) {
+    switch (actionChoice) {
+
+        case 1: { // Attend Class
+            // Going to class increases GPA. The bonus is scaled by
+            // Knowledge — a more prepared student benefits more from lectures.
+            double gpaGain = 0.02 + (player.getKnowledge() / 100.0) * 0.03;
+
+            player.applyGpa(gpaGain);
+            player.applyStress(10);   // Deadlines and coursework add stress
+            player.applyEnergy(-15);  // Sitting through lectures drains energy
+
+            std::cout << "\nYou attended class.\n";
+            std::cout << "  GPA +" << std::fixed; // gpa shown in displayDailyStatus
+            std::cout << "  Stress +10, Energy -15\n";
+            break;
+        }
+
+        case 2: { // Study
+            // Studying builds Knowledge permanently and improves GPA slightly.
+            // It costs energy and reduces happiness (it's not fun).
+            player.applyKnowledge(5);
+            player.applyGpa(0.01);
+            player.applyStress(8);
+            player.applyEnergy(-15);
+            player.applyHappiness(-5);
+
+            std::cout << "\nYou studied for a block.\n";
+            std::cout << "  Knowledge +5, GPA +0.01\n";
+            std::cout << "  Stress +8, Energy -15, Happiness -5\n";
+            break;
+        }
+
+        case 3: { // Relax / Hobby
+            // Relaxing restores happiness and cuts stress.
+            // It costs money (you go out or buy something) and a little energy.
+            player.applyHappiness(15);
+            player.applyStress(-12);
+            player.applyEnergy(-10);
+            player.applyMoney(-15);
+
+            std::cout << "\nYou relaxed and enjoyed a hobby.\n";
+            std::cout << "  Happiness +15, Stress -12\n";
+            std::cout << "  Energy -10, Money -$15\n";
+            break;
+        }
+
+        case 4: { // Sleep / Rest
+            // Resting during the day is less effective than overnight sleep,
+            // but it's a useful emergency recovery if energy is critically low.
+            player.applyEnergy(25);
+            player.applyHealth(5);
+            player.applyStress(-8);
+
+            std::cout << "\nYou rested and recovered some energy.\n";
+            std::cout << "  Energy +25, Health +5, Stress -8\n";
+            break;
+        }
+
+        case 5: { // Work Part-Time
+            // Working earns money but burns energy and adds stress.
+            // It's necessary for financial stability but easy to overdo.
+            player.applyMoney(40);
+            player.applyEnergy(-20);
+            player.applyStress(12);
+
+            std::cout << "\nYou worked a part-time shift.\n";
+            std::cout << "  Money +$40, Stress +12, Energy -20\n";
+            break;
+        }
+
+        default:
+            // This should never happen because InputManager validates the range.
+            std::cout << "Invalid action. Please try again.\n";
+            break;
+    }
 }
 
+// ----------------------------
+// maybeTriggerMorningEvent: 30% chance each day.
+//
+// Picks a random event from the list and applies all its stat
+// changes directly using player.applyXxx() calls.
+// No lambdas — each Event is a plain struct of integers.
+// ----------------------------
+void Game::maybeTriggerMorningEvent() {
+    // Roll a number 1-100; trigger only if it lands in the bottom 30%
+    int roll = Util::randomInt(1, 100);
+    if (roll > 30) {
+        return; // No event today — lucky!
+    }
+
+    // Pick a random event from the list
+    int eventIndex = Util::randomInt(0, static_cast<int>(events.size()) - 1);
+    const Event& randomEvent = events[eventIndex];
+
+    // Print the event description so the player knows what happened
+    std::cout << "\n*** Morning Event: " << randomEvent.name << " ***\n";
+    std::cout << randomEvent.description << "\n";
+
+    // Apply all the stat changes stored in the Event struct.
+    // This is straightforward — no function calls, no lambdas.
+    player.applyHealth(randomEvent.healthChange);
+    player.applyEnergy(randomEvent.energyChange);
+    player.applyStress(randomEvent.stressChange);
+    player.applyHappiness(randomEvent.happinessChange);
+    player.applyKnowledge(randomEvent.knowledgeChange);
+    player.applyMoney(randomEvent.moneyChange);
+    player.applyGpa(randomEvent.gpaChange);
+
+    player.clampStats();
+}
+
+// ----------------------------
+// applyOvernightEffects: runs automatically at the end of each day.
+//
+// High stress is dangerous — it physically wears the body down.
+// Overnight sleep partially restores energy and eases stress.
+// These effects simulate the natural rhythm of a student's week.
+// ----------------------------
+void Game::applyOvernightEffects() {
+    // High stress (>80) damages health — the body cannot sustain that level
+    if (player.getStress() > 80) {
+        player.applyHealth(-10);
+        std::cout << "Your high stress damaged your health overnight! (Health -10)\n";
+    }
+
+    // Sleeping overnight restores a significant portion of energy
+    player.applyEnergy(30);
+    std::cout << "You slept overnight. (Energy +30)\n";
+
+    // Stress decreases slightly with rest — but not much without hobbies
+    player.applyStress(-5);
+    std::cout << "Your stress eased a little overnight. (Stress -5)\n";
+}
+
+// ----------------------------
+// initEvents: creates the list of random morning events.
+//
+// Each event is a plain struct — name, description, and flat
+// integer/double stat changes. No lambdas or function pointers.
+// Game.cpp applies the changes directly in maybeTriggerMorningEvent().
+// ----------------------------
 void Game::initEvents() {
     events = {
-        {"Surprise Quiz", "A professor gives an unplanned quiz.", [](Player& player) {
-            int bonus = player.getKnowledge() / 10;
-            player.applyGpa(0.05 + bonus * 0.01);
-            player.applyStress(10);
-            player.applyHappiness(-5);
-            std::cout << "Event: Surprise Quiz! Your knowledge helped you do well.\n";
-        }},
-        {"Club Invitation", "A student club invites you to a fun event.", [](Player& player) {
-            player.applyHappiness(15);
-            player.applyStress(-10);
-            player.applyKnowledge(5);
-            std::cout << "Event: Club Invitation! You made friends and enjoyed a break.\n";
-        }},
-        {"Rainy Day", "Bad weather slows you down and affects your mood.", [](Player& player) {
-            player.applyEnergy(-10);
-            player.applyHappiness(-10);
-            player.applyStress(5);
-            std::cout << "Event: Rainy Day. It feels tougher to stay motivated today.\n";
-        }},
-        {"Scholarship Offer", "A scholarship increases your financial stability.", [](Player& player) {
-            player.applyMoney(80);
-            player.applyHappiness(10);
-            std::cout << "Event: Scholarship Offer! Your money improved.\n";
-        }},
-        {"Lost Wallet", "You misplace your wallet and lose some money.", [](Player& player) {
-            player.applyMoney(-30);
-            player.applyStress(10);
-            std::cout << "Event: Lost Wallet. You need to be more careful with your budget.\n";
-        }},
-        {"Group Project", "A tight deadline raises stress but rewards academic progress.", [](Player& player) {
-            player.applyKnowledge(8);
-            player.applyStress(15);
-            player.applyHappiness(-5);
-            player.applyGpa(0.05);
-            std::cout << "Event: Group Project deadline. It was hard work, but you learned a lot.\n";
-        }},
-        {"Illness", "You catch a cold and need to rest.", [](Player& player) {
-            player.applyHealth(-20);
-            player.applyEnergy(-20);
-            player.applyStress(10);
-            player.applyHappiness(-10);
-            std::cout << "Event: Illness. Take care of yourself and recover soon.\n";
-        }},
-        {"Campus Festival", "A festival boosts your happiness and relieves stress.", [](Player& player) {
-            player.applyHappiness(20);
-            player.applyStress(-15);
-            player.applyEnergy(-10);
-            player.applyMoney(-20);
-            std::cout << "Event: Campus Festival! You had a fun and relaxing time.\n";
-        }}
+        // name, description, health, energy, stress, happiness, knowledge, money, gpa
+        {
+            "Surprise Quiz",
+            "A professor gives an unplanned quiz. Your preparation pays off!",
+            0, 0, 10, -5, 0, 0, 0.05
+        },
+        {
+            "Club Invitation",
+            "A student club invites you to a fun event. You make new friends!",
+            0, 0, -10, 15, 5, 0, 0.0
+        },
+        {
+            "Rainy Day",
+            "Bad weather slows you down and affects your mood.",
+            0, -10, 5, -10, 0, 0, 0.0
+        },
+        {
+            "Scholarship Offer",
+            "You receive a small scholarship. Your financial stress eases!",
+            0, 0, 0, 10, 0, 80, 0.0
+        },
+        {
+            "Lost Wallet",
+            "You misplaced your wallet and lost some cash. Stay organized!",
+            0, 0, 10, -5, 0, -30, 0.0
+        },
+        {
+            "Group Project",
+            "A tight group project deadline arrives. Hard work, but worth it.",
+            0, 0, 15, -5, 8, 0, 0.05
+        },
+        {
+            "Illness",
+            "You caught a cold. Rest up and take care of yourself.",
+            -15, -20, 10, -10, 0, 0, 0.0
+        },
+        {
+            "Campus Festival",
+            "There is a campus festival today! You enjoy a fun, relaxing morning.",
+            0, -10, -15, 20, 0, -20, 0.0
+        },
+        {
+            "Found $20",
+            "You found $20 on the ground near the cafeteria. Lucky day!",
+            0, 0, 0, 5, 0, 20, 0.0
+        }
     };
 }
 
-int Game::chooseDailyActivity() const {
-    return Menu::promptActivityMenu(activities);
-}
-
-void Game::enterMapMode() {
-    while (true) {
-        map.render(timeSystem);
-
-        char input = ' ';
-        std::cout << "\nChoose a direction: ";
-        std::cin >> input;
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-
-        if (std::toupper(static_cast<unsigned char>(input)) == 'Q') {
-            return;
-        }
-
-        if (map.movePlayer(input, timeSystem)) {
-            std::cout << "\nYou moved to " << map.getLocationName() << ".\n";
-            if (map.getLocationType() != LocationType::CampusPath) {
-                handleLocation();
-            }
-        }
-    }
-}
-
-bool Game::performActivity() {
-    int selection = chooseDailyActivity();
-    if (selection == static_cast<int>(activities.size()) + 2) {
-        trySaveGame();
-        return false;
-    }
-
-    if (selection == static_cast<int>(activities.size()) + 1) {
-        enterMapMode();
-        return true;
-    }
-
-    const Activity& activity = activities[selection - 1];
-    std::cout << "\nYou chose: " << activity.name << "\n";
-
-    if (activity.name == "Sleep") {
-        timeSystem.sleep();
-        std::cout << "You slept through the night and woke up at 08:00 AM.\n";
-    } else {
-        if (activity.energyChange < 0 && player.getEnergy() < -activity.energyChange) {
-            std::cout << "You're too tired to do this.\n";
-            return true;
-        }
-
-        player.applyHealth(activity.healthChange);
-        player.applyEnergy(activity.energyChange);
-        player.applyStress(activity.stressChange);
-        player.applyHappiness(activity.happinessChange);
-        player.applyKnowledge(activity.knowledgeChange);
-        player.applyMoney(activity.moneyChange);
-        player.applyGpa(activity.gpaChange);
-
-        if (activity.duration > 0) {
-            std::string before = timeSystem.formatCurrentTime();
-            timeSystem.advanceTime(activity.duration);
-            std::string after = timeSystem.formatCurrentTime();
-            std::cout << "Time: " << before << " -> " << after << "\n";
-            std::cout << "Time spent: " << activity.duration << " minutes\n";
-        }
-    }
-
-    player.clampStats();
-    std::cout << "Activity complete.\n";
-    return true;
-}
-
-std::vector<Activity> Game::getActivitiesForLocation(LocationType location) const {
-    std::vector<Activity> list;
-    switch (location) {
-        case LocationType::Dorm:
-            list = {
-                {"Rest", "Short rest in your dorm.", 60, 0, 20, -10, 0, 0, 0, 0.0},
-                {"Study", "Study in your room.", 60, 0, -10, 5, 0, 5, 0, 0.0}
-            };
-            break;
-        case LocationType::Library:
-            list = {
-                {"Study", "Focused study session.", 60, 0, -10, 5, 0, 8, 0, 0.0},
-                {"Read", "Light reading.", 30, 0, -3, -3, 0, 3, 0, 0.0},
-                {"Deep Study", "Long deep study.", 120, 0, -20, 10, 0, 15, 0, 0.0}
-            };
-            break;
-        case LocationType::Gym:
-            list = {
-                {"Exercise", "Regular workout.", 60, 5, -15, -10, 0, 0, 0, 0.0},
-                {"Heavy Training", "Intense training.", 120, 10, -25, -15, 0, 0, 0, 0.0},
-                {"Rest", "Short rest at the gym.", 30, 0, 5, -5, 0, 0, 0, 0.0}
-            };
-            break;
-        case LocationType::Cafeteria:
-            list = {
-                {"Eat", "Eat a full meal.", 30, 2, 15, 0, 0, 0, -10, 0.0},
-                {"Cheap Meal", "A cheaper quick meal.", 20, 0, 8, 0, 0, 0, -5, 0.0},
-                {"Social Meal", "Eat and socialize.", 60, 0, 5, 0, 8, 0, -15, 0.0}
-            };
-            break;
-        case LocationType::StudentCenter:
-            list = {
-                {"Socialize", "Chat and meet people.", 60, 0, -5, -8, 10, 0, 0, 0.0},
-                {"Relax", "Relax in the common area.", 30, 0, 0, -5, 3, 0, 0, 0.0},
-                {"Club Activity", "Participate in a club.", 120, 0, -15, 0, 8, 3, 0, 0.0}
-            };
-            break;
-        case LocationType::Classroom:
-            list = {
-                {"Review Notes", "Quick review of notes.", 30, 0, -5, 0, 0, 3, 0, 0.0},
-                {"Study", "Study in the classroom.", 60, 0, -10, 5, 0, 6, 0, 0.0}
-            };
-            break;
-        default:
-            break;
-    }
-    return list;
-}
-
-void Game::handleLocation() {
-    LocationType loc = map.getLocationType();
-    std::string locName = map.getLocationName();
-    auto locActivities = getActivitiesForLocation(loc);
-    if (locActivities.empty()) {
-        std::cout << "There is nothing to do here.\n";
-        return;
-    }
-
-    std::cout << "Day: " << player.getDay() << "\n";
-    std::cout << "Time: " << timeSystem.formatCurrentTime() << "\n";
-    std::cout << "Energy: " << player.getEnergy() << "\n";
-
-    int choice = Menu::promptLocationMenu(locActivities, locName);
-    if (choice == static_cast<int>(locActivities.size()) + 1) {
-        std::cout << "You leave the " << locName << ".\n";
-        return;
-    }
-
-    const Activity& activity = locActivities[choice - 1];
-
-    if (activity.energyChange < 0 && player.getEnergy() < -activity.energyChange) {
-        std::cout << "You're too tired to do this.\n";
-        return;
-    }
-
-    std::string before = timeSystem.formatCurrentTime();
-
-    player.applyHealth(activity.healthChange);
-    player.applyEnergy(activity.energyChange);
-    player.applyStress(activity.stressChange);
-    player.applyHappiness(activity.happinessChange);
-    player.applyKnowledge(activity.knowledgeChange);
-    player.applyMoney(activity.moneyChange);
-    player.applyGpa(activity.gpaChange);
-
-    if (activity.duration > 0) {
-        timeSystem.advanceTime(activity.duration);
-    }
-
-    std::string after = timeSystem.formatCurrentTime();
-
-    player.clampStats();
-
-    std::cout << "\nActivity completed: " << activity.name << "\n";
-    std::cout << "Time spent: " << activity.duration << " minutes\n";
-    std::cout << "Time: " << before << " -> " << after << "\n";
-    std::cout << player.statusSummary();
-}
-
-void Game::maybeTriggerEvent() {
-    int chance = Util::randomInt(1, 100);
-    if (chance <= 35) {
-        int eventIndex = Util::randomInt(0, static_cast<int>(events.size() - 1));
-        events[eventIndex].effect(player);
-        player.clampStats();
-    }
-}
-
-void Game::processExam() {
-    std::cout << "\nExam day has arrived!\n";
-    double knowledgeFactor = player.getKnowledge() * 0.02;
-    double energyFactor = player.getEnergy() * 0.015;
-    double stressFactor = player.getStress() * 0.01;
-    double score = knowledgeFactor + energyFactor - stressFactor + (Util::randomInt(0, 10) * 0.01);
-    double gpaChange = 0.1 + score * 0.15;
-    if (gpaChange < 0.0) {
-        gpaChange = 0.0;
-    }
-    if (gpaChange > 0.4) {
-        gpaChange = 0.4;
-    }
-
-    player.applyGpa(gpaChange);
-    player.applyStress(10);
-    player.applyHappiness(static_cast<int>(gpaChange * 10.0));
-    player.applyEnergy(-10);
-    player.clampStats();
-
-    std::cout << "Exam result: Your GPA improved by " << gpaChange << ".\n";
-}
-
+// ----------------------------
+// trySaveGame: writes player stats to disk.
+// Prints a success or failure message.
+// ----------------------------
 void Game::trySaveGame() const {
     if (SaveManager::save(player, saveFilePath)) {
         std::cout << "Game saved to " << saveFilePath << ".\n";
     } else {
-        std::cout << "Unable to save the game.\n";
+        std::cout << "Could not save the game. Check that the data/ folder exists.\n";
     }
 }
 
+// ----------------------------
+// displayFinalResult: shown at the end of the semester or on Game Over.
+//
+// Evaluates the player's performance across multiple metrics and
+// prints an appropriate ending message.
+// ----------------------------
 void Game::displayFinalResult() const {
-    std::cout << "\n=== Semester Complete ===\n";
+    std::cout << "\n==========================================\n";
+    std::cout << "           SEMESTER COMPLETE              \n";
+    std::cout << "==========================================\n";
     std::cout << player.statusSummary();
 
+    // --- Game Over check ---
     if (!player.isAlive()) {
-        std::cout << "Your journey ended early due to burnout or poor health.\n";
+        std::cout << "\nYour journey ended early.\n";
+        if (player.getHealth() <= 0) {
+            std::cout << "Your health dropped to zero from overwork and stress.\n";
+        } else {
+            std::cout << "You ran out of energy and could not continue.\n";
+        }
         std::cout << "Ending: Burned Out\n";
+        std::cout << "Tip: Next time, use Relax and Rest actions more often.\n";
         return;
     }
 
-    if (player.getGpa() < 1.5) {
-        std::cout << "Ending: Academic Failure\n";
-    } else if (player.getMoney() < 50) {
-        std::cout << "Ending: Financial Crisis\n";
-    } else if (player.getGpa() >= 3.5 && player.getHappiness() >= 70) {
+    // --- Evaluate performance across 3 key metrics ---
+    double finalGpa   = player.getGpa();
+    int    finalMoney = player.getMoney();
+    int    finalKnow  = player.getKnowledge();
+
+    std::cout << "\n--- Final Evaluation ---\n";
+
+    // Pick an ending label based on GPA, money, and happiness
+    if (finalGpa >= 3.5 && player.getHappiness() >= 70) {
         std::cout << "Ending: Honor Student\n";
+        std::cout << "You excelled academically and stayed happy. Outstanding!\n";
+    } else if (finalGpa < 1.5) {
+        std::cout << "Ending: Academic Struggle\n";
+        std::cout << "Your GPA needs improvement. Attend more classes next time.\n";
+    } else if (finalMoney < 50) {
+        std::cout << "Ending: Financial Strain\n";
+        std::cout << "You made it through, but barely have money left. Work more!\n";
     } else if (player.getStress() >= 80) {
-        std::cout << "Ending: Burned Out\n";
+        std::cout << "Ending: Burned Out (survived)\n";
+        std::cout << "You survived but your stress is dangerously high. Rest more!\n";
     } else {
         std::cout << "Ending: Balanced Student\n";
+        std::cout << "You completed the semester with solid balance. Well done!\n";
     }
 
-    if (player.getGpa() >= 3.5 && player.getHappiness() >= 60) {
-        std::cout << "Congratulations! You managed your academics and wellbeing well.\n";
-    } else if (player.getGpa() >= 2.5) {
-        std::cout << "You completed the semester with room to grow next time.\n";
-    } else {
-        std::cout << "Reflect on your choices and try to improve your balance in the next semester.\n";
-    }
+    // Print a detailed summary line
+    std::cout << "\nFinal GPA      : " << std::fixed << std::setprecision(2) << finalGpa << " / 4.00\n";
+    std::cout << "Final Knowledge: " << finalKnow << " / 100\n";
+    std::cout << "Final Money    : $" << finalMoney << "\n";
+    std::cout << "==========================================\n";
 }
