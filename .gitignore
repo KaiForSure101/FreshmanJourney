@@ -11,3 +11,6 @@ data/savegame.txt
 *.exe
 *.obj
 *.pdb
+
+# Workspace metadata
+.freebuff/
