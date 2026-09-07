@@ -1,0 +1,10 @@
+^D:\SCHOOL\FRESHMANJOURNEY\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/School/FreshmanJourney -BD:/School/FreshmanJourney/build --check-stamp-file D:/School/FreshmanJourney/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
