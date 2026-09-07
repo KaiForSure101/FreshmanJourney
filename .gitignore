@@ -1,0 +1,13 @@
+# Build files
+build/
+
+# Visual Studio Code
+.vscode/
+
+# Save game data
+data/savegame.txt
+
+# Executables
+*.exe
+*.obj
+*.pdb
