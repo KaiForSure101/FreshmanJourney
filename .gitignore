@@ -14,3 +14,7 @@ data/savegame.txt
 
 # Workspace metadata
 .freebuff/
+
+# Standalone distribution package
+FreshmanJourney-Standalone/
+FreshmanJourney-Standalone.zip
